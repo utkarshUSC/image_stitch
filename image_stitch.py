@@ -1,24 +1,63 @@
 import cv2
 import numpy as np
-from min_max import maxmin
-def stitch(imageA,imageB):
-        s = cv2.ORB_create(1500)
-        (kpsA, featuresA) = s.detectAndCompute(imageA,None)
-        (kpsB, featuresB) = s.detectAndCompute(imageB,None)
-        bf = cv2.BFMatcher()
-        matches = bf.knnMatch(featuresA,featuresB,k=2)
+from warp import warpTwoImages
+from template import nccStitch
 
 
-        
-        pairsOfKp1 = [i[0].queryIdx for i in matches]
-        pairsOfKp2 = [i[0].trainIdx for i in matches]
-        pointsA=np.array([kpsA[k].pt for k in pairsOfKp1], np.float32)
-        pointsB=np.array([kpsB[t].pt for t in pairsOfKp2], np.float32)
-        overlap=maxmin(pointsA,imageB)
-        H,mask=cv2.findHomography(pointsA,pointsB,cv2.RANSAC,3)
-        imageB=cv2.resize(imageB,(imageB.shape[1],imageA.shape[0]))
-        result = cv2.warpPerspective(imageA,H,(int(imageA.shape[1] +(1-overlap)* imageB.shape[1]), imageA.shape[0]))
-        
-        result[0:imageB.shape[0], 0:imageB.shape[1]] = imageB
-       
-        return result
+# from mi_stitch import miStitch
+def stitch(imageA, imageB):
+    val = 0
+    # ORB function is used
+    s = cv2.ORB_create(10000)
+
+    # keypoints and features of imageA and imageB
+    # for bigger width and height it does not work
+    if (imageA.shape[1] < 32767 and imageB.shape[1] < 32767):
+        (kpsA, featuresA) = s.detectAndCompute(imageA, None)
+        (kpsB, featuresB) = s.detectAndCompute(imageB, None)
+    else:
+        H, val, result = nccStitch(imageA, imageB)
+        return H, val, result
+
+    # length of keypoints of A and B less than 4  use nccStitch
+    if ((len(kpsA) < 4) or (len(kpsB) < 4)):
+        H, val, result = nccStitch(imageA, imageB)
+        return H, val, result
+    print("kps")
+
+    # matcher for two imageA and imageB keyopints
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    matches = bf.knnMatch(featuresA, featuresB, k=2)
+
+    # selecting points from A and B which are nearer to each other
+    good = []
+    for m, n in matches:
+        if m.distance < 0.5 * n.distance:
+            good.append([m])
+
+    # getting pointA from imageA and from imageB which satisfy the condition
+    pairsOfKp1 = [i[0].queryIdx for i in good]
+    pairsOfKp2 = [i[0].trainIdx for i in good]
+    pointsA = np.array([kpsA[k].pt for k in pairsOfKp1], np.float32)
+    pointsB = np.array([kpsB[t].pt for t in pairsOfKp2], np.float32)
+
+    # length is less than 4 then go to ncc Stitching
+    if (len(pointsA) < 4 or len(pointsB) < 4):
+        H, val, result = nccStitch(imageA, imageB)
+        return H, val, result
+
+    # overlap=maxmin(pointsA,imageA)
+    # finding homography
+    H, mask = cv2.findHomography(pointsB, pointsA, cv2.RANSAC, 3)
+    print(pointsA)
+    print(pointsB)
+    print(H)
+
+    # H is None the use nccStitch
+    if H is None:
+        H, val, result = nccStitch(imageA, imageB)
+        return H, val, result
+
+    # warp two image A and B
+    result = warpTwoImages(imageA, imageB, H)
+    return H, val, result
